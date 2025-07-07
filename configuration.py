@@ -217,3 +217,77 @@ class Configuration:
             atoms.set_calculator(calculator)
             
         return atoms
+        
+    @staticmethod
+    def from_ase_atoms(
+        atoms: ase.Atoms,
+        type_map_reverse: Dict[str, int]
+    ) -> 'Configuration':
+        """
+        Генерирует объект Configuration из объекта ase.Atoms.
+
+        Args:
+            atoms (ase.Atoms): Объект ASE для преобразования.
+            type_map_reverse (Dict[str, int]): Словарь для преобразования химических
+                                               символов в целочисленные типы,
+                                               например {'C': 0, 'H': 1}.
+
+        Returns:
+            Configuration: Новый объект Configuration.
+        """
+        config = Configuration()
+
+        # 1. Размер
+        config.size = len(atoms)
+
+        # 2. Ячейка
+        if np.any(atoms.cell):
+            config.supercell = atoms.cell.tolist()
+
+        # 3. Энергия
+        try:
+            config.energy = atoms.get_potential_energy()
+        except:
+            pass # Энергия не задана
+
+        # 4. Напряжения
+        try:
+            # ASE возвращает стресс в Voigt-нотации [xx, yy, zz, yz, xz, xy]
+            # .cfg формат PlusStress - это часто (вириальный стресс * объем)
+            stress = atoms.get_stress(voigt=True)
+            volume = atoms.get_volume()
+            plus_stress_values = stress * volume
+            stress_keys = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy']
+            config.plus_stress = dict(zip(stress_keys, plus_stress_values))
+        except:
+            pass # Напряжения не заданы
+
+        # 5. Данные по атомам
+        positions = atoms.get_positions()
+        symbols = atoms.get_chemical_symbols()
+        has_forces = 'forces' in atoms.arrays
+        forces = atoms.get_forces() if has_forces else None
+
+        for i in range(config.size):
+            atom_dict = {}
+            # ID (1-индексированный)
+            atom_dict['id'] = i + 1
+            # Тип (преобразованный из символа)
+            symbol = symbols[i]
+            if symbol not in type_map_reverse:
+                raise KeyError(f"Символ '{symbol}' не найден в словаре type_map_reverse.")
+            atom_dict['type'] = type_map_reverse[symbol]
+            # Координаты
+            atom_dict['cartes_x'], atom_dict['cartes_y'], atom_dict['cartes_z'] = positions[i]
+            # Силы (если есть)
+            if has_forces and forces is not None:
+                atom_dict['fx'], atom_dict['fy'], atom_dict['fz'] = forces[i]
+            
+            config.atom_data.append(atom_dict)
+        
+        # 6. Дополнительные поля (Features)
+        # Берем данные из словаря .info объекта ASE
+        for key, value in atoms.info.items():
+            config.features[key] = str(value)
+            
+        return config
